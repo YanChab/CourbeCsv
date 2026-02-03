@@ -39,7 +39,11 @@ class CsvPlotApp:
         # 'Tracer' button removed: plotting is now automatique lors du changement d'axes
 
         # Filtering controls
-        tk.Label(top, text='Fréquence (Hz):').pack(side=tk.LEFT, padx=(10, 2))
+        tk.Label(top, text='Fréq. échant.:').pack(side=tk.LEFT, padx=(10, 2))
+        self.sampling_freq_label = tk.Label(top, text='- Hz', width=10, anchor='w')
+        self.sampling_freq_label.pack(side=tk.LEFT)
+        
+        tk.Label(top, text='Coupure (Hz):').pack(side=tk.LEFT, padx=(10, 2))
         self.filter_freq_var = tk.StringVar(value='1.0')
         filter_entry = tk.Entry(top, textvariable=self.filter_freq_var, width=10)
         filter_entry.pack(side=tk.LEFT, padx=2)
@@ -163,6 +167,41 @@ class CsvPlotApp:
             messagebox.showwarning('Vide', 'Le fichier CSV est vide.')
             return
 
+        # Convert datetime columns to seconds (relative to first value)
+        for col in df.columns:
+            if not pd.api.types.is_numeric_dtype(df[col]):
+                try:
+                    # Check if it looks like a datetime with French format (dd/mm/yyyy HH:MM:SS,microseconds)
+                    first_val = str(df[col].iloc[0])
+                    if '/' in first_val and ':' in first_val:
+                        # Custom parser for format: "30/01/2026 13:57:56,630000"
+                        def parse_french_datetime(val):
+                            try:
+                                val_str = str(val)
+                                # Replace comma with dot for microseconds
+                                val_str = val_str.replace(',', '.')
+                                # Parse with explicit format
+                                return pd.to_datetime(val_str, format='%d/%m/%Y %H:%M:%S.%f')
+                            except:
+                                return pd.NaT
+                        
+                        datetime_col = df[col].apply(parse_french_datetime)
+                        if datetime_col.notna().all():
+                            # Convert to seconds from start
+                            time_delta = (datetime_col - datetime_col.iloc[0]).dt.total_seconds()
+                            df[col] = time_delta
+                except Exception:
+                    pass  # Keep original if conversion fails
+        
+        # Convert string columns with French decimal format (comma) to numeric
+        for col in df.columns:
+            if df[col].dtype == object:
+                try:
+                    # Try to convert string with comma decimal to float
+                    df[col] = df[col].astype(str).str.replace(',', '.').astype(float)
+                except Exception:
+                    pass  # Keep as string if conversion fails
+
         self.df = df
         self.loaded_file_path = path  # Store the path of loaded file
         cols = list(df.columns)
@@ -180,8 +219,9 @@ class CsvPlotApp:
         except Exception:
             self.sampling_frequency = 1000  # Default sampling frequency
 
-        # Update filter frequency field with calculated sampling frequency
-        self.filter_freq_var.set(f'{self.sampling_frequency / 2:.2f}')  # Set to Nyquist frequency / 2
+        # Update sampling frequency display and filter frequency field
+        self.sampling_freq_label.config(text=f'{self.sampling_frequency:.0f} Hz')
+        self.filter_freq_var.set(f'{self.sampling_frequency / 4:.2f}')  # Suggest Nyquist/4 as default cutoff
 
         # Update X/Y menus. suspend auto-plot while populating
         self._suspend_auto_plot = True
@@ -289,10 +329,15 @@ class CsvPlotApp:
         if event.inaxes != self.ax or event.xdata is None or event.ydata is None:
             return
 
-        # Find closest point to click
-        xy_disp = self.ax.transData.transform(np.column_stack([self.x_data, self.y_data]))
-        d = np.hypot(xy_disp[:, 0] - event.x, xy_disp[:, 1] - event.y)
-        idx = int(np.argmin(d))
+        # Find closest point to click - use a copy to avoid modifying original
+        try:
+            x_copy = np.array(self.x_data, dtype=float)
+            y_copy = np.array(self.y_data, dtype=float)
+            xy_disp = self.ax.transData.transform(np.column_stack([x_copy, y_copy]))
+            d = np.hypot(xy_disp[:, 0] - event.x, xy_disp[:, 1] - event.y)
+            idx = int(np.argmin(d))
+        except Exception:
+            return
 
         # Display index if click is close enough (threshold: 10 pixels)
         if d[idx] < 10:
@@ -498,57 +543,62 @@ class CsvPlotApp:
             
             # Ensure normalized frequency is between 0 and 1
             if normalized_cutoff >= 1:
-                messagebox.showwarning('Avertissement', 'La fréquence de coupure est trop élevée. Diminuez la valeur.')
+                messagebox.showwarning('Avertissement', f'La fréquence de coupure ({freq_cutoff} Hz) est trop élevée pour la fréquence d\'échantillonnage ({fs:.1f} Hz). Diminuez la valeur en dessous de {fs/2:.1f} Hz.')
                 normalized_cutoff = 0.99
+            
+            if normalized_cutoff <= 0:
+                messagebox.showerror('Erreur', 'La fréquence normalisée doit être positive.')
+                return
             
             # Design the filter
             b, a = signal.butter(4, normalized_cutoff, btype='low')
             
-            # Apply the filter
-            self.y_filtered = signal.filtfilt(b, a, self.y_data)
+            # Handle NaN values: interpolate them before filtering
+            y_to_filter = self.y_data.copy()
+            nan_mask = np.isnan(y_to_filter)
+            if np.any(nan_mask):
+                # Interpolate NaN values
+                valid_indices = np.where(~nan_mask)[0]
+                nan_indices = np.where(nan_mask)[0]
+                if len(valid_indices) > 0:
+                    y_to_filter[nan_mask] = np.interp(nan_indices, valid_indices, y_to_filter[valid_indices])
             
-            # Redraw with filtered data, preserving current zoom limits
+            # Apply the filter
+            y_filtered = signal.filtfilt(b, a, y_to_filter)
+            self.y_filtered = y_filtered
+            
+            # Redraw with filtered data
             x_choice = self.x_var.get()
             x = self.x_data
 
-            # save current view limits to preserve zoom
-            try:
-                cur_xlim = self.ax.get_xlim()
-                cur_ylim = self.ax.get_ylim()
-            except Exception:
-                cur_xlim = None
-                cur_ylim = None
-
             self.ax.clear()
-            self.ax.plot(x, self.y_data, linestyle='-', label='Original', color='blue', alpha=0.7)
-            self.ax.plot(x, self.y_filtered, linestyle='-', label=f'Filtré ({freq_cutoff} Hz)', color='red', linewidth=2)
+            # Plot original first, then filtered on top with thicker line
+            self.ax.plot(x, self.y_data, linestyle='-', label='Original', color='blue', alpha=0.4, linewidth=0.5)
+            self.ax.plot(x, y_filtered, linestyle='-', label=f'Filtré ({freq_cutoff} Hz)', color='red', linewidth=2, zorder=10)
 
             self.ax.set_xlabel(x_choice)
             self.ax.set_ylabel(self.y_choice)
             self.ax.set_title(f'{self.y_choice} vs {x_choice} (avec filtre)')
             self.ax.grid(True)
             self.ax.legend()
+            
+            # Force auto-scale to show both curves
+            self.ax.relim()
+            self.ax.autoscale_view()
+            
             self.fig.tight_layout()
 
-            # restore previous zoom limits if available
-            try:
-                if cur_xlim is not None:
-                    self.ax.set_xlim(cur_xlim)
-                if cur_ylim is not None:
-                    self.ax.set_ylim(cur_ylim)
-            except Exception:
-                pass
-
+            # Force redraw
             self.canvas.draw()
+            self.canvas.flush_events()
 
-            # Only set base limits if not already set (don't overwrite user's base)
-            if self._base_xlim is None or self._base_ylim is None:
-                try:
-                    self._base_xlim = self.ax.get_xlim()
-                    self._base_ylim = self.ax.get_ylim()
-                except Exception:
-                    self._base_xlim = None
-                    self._base_ylim = None
+            # Update base limits to include both curves
+            try:
+                self._base_xlim = self.ax.get_xlim()
+                self._base_ylim = self.ax.get_ylim()
+            except Exception:
+                self._base_xlim = None
+                self._base_ylim = None
 
             messagebox.showinfo('Succès', f'Filtre passe-bas Butterworth appliqué\nFréquence de coupure: {freq_cutoff} Hz')
         except Exception as e:
