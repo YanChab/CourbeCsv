@@ -44,3 +44,46 @@ python3 main.py
 - matplotlib
 - tkinter (inclus avec Python)
 
+## Docker
+
+### Prérequis
+
+L'application utilise une interface graphique (Tkinter). Pour l'afficher depuis Docker, vous devez configurer le forwarding X11.
+
+#### macOS
+
+1. Installer XQuartz :
+```bash
+brew install --cask xquartz
+```
+
+2. Ouvrir XQuartz, aller dans Préférences > Sécurité et cocher "Autoriser les connexions depuis les clients réseau"
+
+3. Redémarrer XQuartz
+
+4. Lancer l'application :
+```bash
+chmod +x run-docker-mac.sh
+./run-docker-mac.sh
+```
+
+#### Linux
+
+```bash
+xhost +local:docker
+docker-compose up --build
+```
+
+#### Windows
+
+1. Installer VcXsrv ou Xming
+2. Lancer le serveur X avec "Disable access control"
+3. Définir `DISPLAY=host.docker.internal:0` et lancer :
+```bash
+docker-compose up --build
+```
+
+### Fichiers CSV
+
+Placez vos fichiers CSV dans le dossier `data/` pour y accéder depuis le conteneur.
+
