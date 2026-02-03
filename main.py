@@ -202,6 +202,11 @@ class CsvPlotApp:
                 except Exception:
                     pass  # Keep as string if conversion fails
 
+        # Auto-create "Effort Z total (N)" if Z1, Z2, Z3 columns exist
+        z_cols = ['Effort Z1 (N)', 'Effort Z2 (N)', 'Effort Z3 (N)']
+        if all(col in df.columns for col in z_cols):
+            df['Effort Z total (N)'] = df['Effort Z1 (N)'] + df['Effort Z2 (N)'] + df['Effort Z3 (N)']
+
         self.df = df
         self.loaded_file_path = path  # Store the path of loaded file
         cols = list(df.columns)
