@@ -2,6 +2,14 @@
 
 Application graphique pour visualiser et analyser des fichiers CSV contenant des mesures.
 
+## 📥 Téléchargement Windows
+
+**Pas besoin d'installer Python !** Téléchargez simplement l'exécutable :
+
+➡️ [**Télécharger VisualiseurCSV.exe**](https://github.com/YanChab/CourbeCsv/releases/latest/download/VisualiseurCSV.exe)
+
+Double-cliquez sur le fichier pour lancer l'application.
+
 ## Fonctionnalités
 
 - **Chargement de fichiers CSV** : Supporte les séparateurs `,` et `;` ainsi que les décimales avec `.` ou `,` (format français)
@@ -12,7 +20,7 @@ Application graphique pour visualiser et analyser des fichiers CSV contenant des
 - **Filtre passe-bas Butterworth** : Application d'un filtre avec fréquence de coupure configurable
 - **Export CSV** : Export des données sélectionnées, avec option de filtrage
 
-## Installation
+## Installation (développeurs)
 
 Installer les dépendances :
 
