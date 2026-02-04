@@ -113,6 +113,21 @@ class CsvPlotApp:
                                    font=('Segoe UI', 8), fg=COLORS['text_muted'], 
                                    bg=COLORS['bg_medium'], wraplength=240)
         self.file_label.pack(pady=2)
+        
+        # Compare button (initially hidden)
+        self.compare_btn = ModernButton(file_frame, '🔄 Comparer avec...', self.load_compare_csv, 
+                                        width=250, height=28, bg=COLORS['warning'], hover_bg='#F57C00')
+        # Don't pack yet - will be shown after first file is loaded
+        
+        self.compare_label = tk.Label(file_frame, text='', 
+                                      font=('Segoe UI', 8), fg=COLORS['text_muted'], 
+                                      bg=COLORS['bg_medium'], wraplength=240)
+        # Don't pack yet
+        
+        # Cancel compare button (initially hidden)
+        self.cancel_compare_btn = ModernButton(file_frame, '❌ Annuler comparaison', self.cancel_compare, 
+                                               width=250, height=28, bg='#f44336', hover_bg='#d32f2f')
+        # Don't pack yet
 
         # Axes section
         self._create_section(left_panel, '📈 Axes', 1)
@@ -137,10 +152,11 @@ class CsvPlotApp:
         self.y_combo.pack(fill=tk.X, pady=(1, 5))
 
         # Filter section
-        self._create_section(left_panel, '🎚️ Filtre Butterworth', 2)
+        self.filter_section = self._create_section(left_panel, '🎚️ Filtre Butterworth', 2)
         
-        filter_frame = tk.Frame(left_panel, bg=COLORS['bg_medium'])
-        filter_frame.pack(fill=tk.X, padx=15, pady=(0, 8))
+        self.filter_frame = tk.Frame(left_panel, bg=COLORS['bg_medium'])
+        self.filter_frame.pack(fill=tk.X, padx=15, pady=(0, 8))
+        filter_frame = self.filter_frame
         
         # Sampling frequency display (more compact)
         freq_display = tk.Frame(filter_frame, bg=COLORS['bg_light'], padx=8, pady=5)
@@ -170,10 +186,11 @@ class CsvPlotApp:
         self.filter_btn.pack(pady=3)
 
         # Export section
-        self._create_section(left_panel, '💾 Export', 3)
+        self.export_section = self._create_section(left_panel, '💾 Export', 3)
         
-        export_frame = tk.Frame(left_panel, bg=COLORS['bg_medium'])
-        export_frame.pack(fill=tk.X, padx=15, pady=(0, 8))
+        self.export_frame = tk.Frame(left_panel, bg=COLORS['bg_medium'])
+        self.export_frame.pack(fill=tk.X, padx=15, pady=(0, 8))
+        export_frame = self.export_frame
         
         self.export_filtered_var = tk.BooleanVar(value=False)
         self.export_check = ttk.Checkbutton(export_frame, text='Exporter données filtrées',
@@ -227,6 +244,13 @@ class CsvPlotApp:
         self.sampling_frequency = 1000
         self.loaded_file_path = None
         self._suspend_auto_plot = False
+        
+        # Comparison mode
+        self.compare_mode = False
+        self.df_compare = None
+        self.compare_file_path = None
+        self.x_data_compare = None
+        self.y_data_compare = None
 
         # Mouse/zoom state
         self._zoom_rect = None
@@ -284,6 +308,8 @@ class CsvPlotApp:
         # Separator line
         separator = tk.Frame(frame, bg=COLORS['accent'], height=2)
         separator.pack(fill=tk.X, pady=(3, 0))
+        
+        return frame
 
     def _style_axes(self):
         """Apply light theme to matplotlib axes"""
@@ -461,11 +487,167 @@ class CsvPlotApp:
         self.file_label.config(text=f'✅ {os.path.basename(path)}')
         self.index_label.config(text=f'📊 {len(df)} points • {len(cols)} colonnes')
         
+        # Show compare button now that we have a file loaded
+        self.compare_btn.pack(pady=3)
+        
+        # Reset compare mode when loading a new file
+        if self.compare_mode:
+            self.cancel_compare()
+        
         # plot once with defaults
         try:
             self.plot_selected()
         except Exception:
             pass
+
+    def load_compare_csv(self):
+        """Load a second CSV file for comparison"""
+        if self.df is None:
+            messagebox.showwarning('Aucun fichier', 'Chargez d\'abord un fichier CSV principal.')
+            return
+        
+        path = filedialog.askopenfilename(filetypes=[('CSV', '*.csv'), ('All files', '*.*')])
+        if not path:
+            return
+
+        # Read the CSV using the same logic as load_csv
+        df = None
+        sep = None
+        decimal_char = '.'
+        try:
+            with open(path, 'r', newline='', encoding='utf-8') as f:
+                sample = f.read(4096)
+                sniffer = csv.Sniffer()
+                dialect = sniffer.sniff(sample)
+                sep = dialect.delimiter
+                if sep == ';' or (sep != ',' and bool(re.search(r"\d,\d", sample))):
+                    decimal_char = ','
+        except Exception:
+            try:
+                with open(path, 'r', newline='', encoding='utf-8') as f:
+                    sample = f.read(4096)
+                    if ';' in sample:
+                        sep = ';'
+                        if bool(re.search(r"\d,\d", sample)):
+                            decimal_char = ','
+            except Exception:
+                pass
+
+        try:
+            if sep:
+                df = pd.read_csv(path, sep=sep, decimal=decimal_char)
+            else:
+                df = pd.read_csv(path)
+        except Exception as e:
+            messagebox.showerror('Erreur', f"Impossible de lire le fichier:\n{e}")
+            return
+
+        if df is None or df.empty:
+            messagebox.showwarning('Vide', 'Le fichier CSV est vide.')
+            return
+
+        # If df has only one column, retry with semicolon
+        if len(df.columns) == 1 and ';' in df.columns[0]:
+            try:
+                df = pd.read_csv(path, sep=';', decimal=',')
+            except Exception:
+                pass
+
+        # Convert datetime columns to seconds (same logic as load_csv)
+        for col in df.columns:
+            if not pd.api.types.is_numeric_dtype(df[col]):
+                try:
+                    first_val = str(df[col].iloc[0])
+                    if '/' in first_val and ':' in first_val:
+                        def parse_french_datetime(val):
+                            try:
+                                val_str = str(val).replace(',', '.')
+                                return pd.to_datetime(val_str, format='%d/%m/%Y %H:%M:%S.%f')
+                            except:
+                                return pd.NaT
+                        datetime_col = df[col].apply(parse_french_datetime)
+                        if datetime_col.notna().all():
+                            time_delta = (datetime_col - datetime_col.iloc[0]).dt.total_seconds()
+                            df[col] = time_delta
+                except Exception:
+                    pass
+
+        # Convert string columns with French decimal format
+        for col in df.columns:
+            if df[col].dtype == object:
+                try:
+                    df[col] = df[col].astype(str).str.replace(',', '.').astype(float)
+                except Exception:
+                    pass
+
+        # Auto-create "Effort Z total (N)" if Z1, Z2, Z3 columns exist
+        z_cols = ['Effort Z1 (N)', 'Effort Z2 (N)', 'Effort Z3 (N)']
+        if all(col in df.columns for col in z_cols):
+            df['Effort Z total (N)'] = df['Effort Z1 (N)'] + df['Effort Z2 (N)'] + df['Effort Z3 (N)']
+
+        # Check if columns match the original file
+        original_cols = set(self.df.columns)
+        compare_cols = set(df.columns)
+        
+        if original_cols != compare_cols:
+            # Show which columns are different
+            missing_in_compare = original_cols - compare_cols
+            extra_in_compare = compare_cols - original_cols
+            msg = "Les colonnes du fichier de comparaison ne correspondent pas au fichier original.\n\n"
+            if missing_in_compare:
+                msg += f"Colonnes manquantes: {', '.join(list(missing_in_compare)[:5])}\n"
+            if extra_in_compare:
+                msg += f"Colonnes supplémentaires: {', '.join(list(extra_in_compare)[:5])}"
+            messagebox.showerror('Colonnes incompatibles', msg)
+            return
+
+        # Store comparison data
+        self.df_compare = df
+        self.compare_file_path = path
+        self.compare_mode = True
+        
+        # Update UI: show compare label and cancel button, hide filter and export sections
+        import os
+        self.compare_label.config(text=f'🔄 {os.path.basename(path)}')
+        self.compare_label.pack(pady=2)
+        self.cancel_compare_btn.pack(pady=3)
+        
+        # Hide filter and export sections
+        self.filter_section.pack_forget()
+        self.filter_frame.pack_forget()
+        self.export_section.pack_forget()
+        self.export_frame.pack_forget()
+        
+        # Hide compare button (already comparing)
+        self.compare_btn.pack_forget()
+        
+        # Replot with comparison
+        self.plot_selected()
+
+    def cancel_compare(self):
+        """Cancel comparison mode and return to single file view"""
+        self.compare_mode = False
+        self.df_compare = None
+        self.compare_file_path = None
+        self.x_data_compare = None
+        self.y_data_compare = None
+        
+        # Hide compare-related UI
+        self.compare_label.config(text='')
+        self.compare_label.pack_forget()
+        self.cancel_compare_btn.pack_forget()
+        
+        # Show compare button again
+        self.compare_btn.pack(pady=3)
+        
+        # Show filter and export sections again
+        self.filter_section.pack(fill=tk.X, padx=15, pady=(10, 3))
+        self.filter_frame.pack(fill=tk.X, padx=15, pady=(0, 8))
+        self.export_section.pack(fill=tk.X, padx=15, pady=(10, 3))
+        self.export_frame.pack(fill=tk.X, padx=15, pady=(0, 8))
+        
+        # Replot without comparison
+        self.plot_selected()
 
     def plot_selected(self):
         if self.df is None:
@@ -487,7 +669,32 @@ class CsvPlotApp:
 
             self.ax.clear()
             self._style_axes()
-            self.ax.plot(x, y, linestyle='-', label='Original', color='#1565C0', linewidth=1)
+            
+            # Get file names for legend
+            import os
+            file1_name = os.path.basename(self.loaded_file_path) if self.loaded_file_path else 'Fichier 1'
+            
+            # Check if we're in comparison mode
+            if self.compare_mode and self.df_compare is not None:
+                # Plot first file
+                self.ax.plot(x, y, linestyle='-', label=file1_name, color='#1565C0', linewidth=1.5)
+                
+                # Get data from comparison file
+                if x_choice == 'Index':
+                    x_compare = self.df_compare.index
+                else:
+                    x_compare = self.df_compare[x_choice]
+                y_compare = self.df_compare[y_choice]
+                
+                # Store comparison data
+                self.x_data_compare = np.asarray(x_compare)
+                self.y_data_compare = np.asarray(y_compare)
+                
+                # Plot second file with different color
+                file2_name = os.path.basename(self.compare_file_path) if self.compare_file_path else 'Fichier 2'
+                self.ax.plot(x_compare, y_compare, linestyle='-', label=file2_name, color='#D32F2F', linewidth=1.5)
+            else:
+                self.ax.plot(x, y, linestyle='-', label='Original', color='#1565C0', linewidth=1)
             
             # Store data for index selection
             self.x_data = np.asarray(x)
@@ -499,17 +706,31 @@ class CsvPlotApp:
             
             self.ax.set_xlabel(x_choice, fontsize=10)
             self.ax.set_ylabel(y_choice, fontsize=10)
-            self.ax.set_title(f'{y_choice}', fontsize=12, fontweight='bold', color=COLORS['text'])
+            
+            if self.compare_mode:
+                self.ax.set_title(f'{y_choice} - Comparaison', fontsize=12, fontweight='bold', color=COLORS['text'])
+            else:
+                self.ax.set_title(f'{y_choice}', fontsize=12, fontweight='bold', color=COLORS['text'])
+            
             self.ax.legend(loc='upper right', facecolor=COLORS['bg_medium'], 
                           edgecolor=COLORS['border'], labelcolor=COLORS['text'])
             self.fig.tight_layout()
             self.canvas.draw()
             
             # Update status and min/max
-            self.index_label.config(text=f'📊 {len(self.x_data)} points')
-            x_min, x_max = np.nanmin(self.x_data), np.nanmax(self.x_data)
-            y_min, y_max = np.nanmin(self.y_data), np.nanmax(self.y_data)
-            self.minmax_label.config(text=f'X: [{x_min:.2f}, {x_max:.2f}]  |  Y: [{y_min:.2f}, {y_max:.2f}]')
+            if self.compare_mode and self.y_data_compare is not None:
+                self.index_label.config(text=f'🔄 Comparaison: {len(self.x_data)} vs {len(self.x_data_compare)} points')
+                # Show min/max for each curve separately (X and Y)
+                x1_min, x1_max = np.nanmin(self.x_data), np.nanmax(self.x_data)
+                x2_min, x2_max = np.nanmin(self.x_data_compare), np.nanmax(self.x_data_compare)
+                y1_min, y1_max = np.nanmin(self.y_data), np.nanmax(self.y_data)
+                y2_min, y2_max = np.nanmin(self.y_data_compare), np.nanmax(self.y_data_compare)
+                self.minmax_label.config(text=f'X1: [{x1_min:.2f}, {x1_max:.2f}] X2: [{x2_min:.2f}, {x2_max:.2f}]  |  Y1: [{y1_min:.2f}, {y1_max:.2f}] Y2: [{y2_min:.2f}, {y2_max:.2f}]')
+            else:
+                self.index_label.config(text=f'📊 {len(self.x_data)} points')
+                x_min, x_max = np.nanmin(self.x_data), np.nanmax(self.x_data)
+                y_min, y_max = np.nanmin(self.y_data), np.nanmax(self.y_data)
+                self.minmax_label.config(text=f'X: [{x_min:.2f}, {x_max:.2f}]  |  Y: [{y_min:.2f}, {y_max:.2f}]')
             
             # Save base limits for reset
             try:
