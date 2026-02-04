@@ -11,77 +11,221 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
 
+# Modern color scheme - Light theme
+COLORS = {
+    'bg_dark': '#f5f5f5',
+    'bg_medium': '#ffffff',
+    'bg_light': '#e8e8e8',
+    'accent': '#2196F3',
+    'accent_hover': '#1976D2',
+    'text': '#333333',
+    'text_muted': '#666666',
+    'success': '#4CAF50',
+    'warning': '#FF9800',
+    'border': '#d0d0d0'
+}
+
+class ModernButton(tk.Canvas):
+    """Custom modern button with hover effects"""
+    def __init__(self, parent, text, command=None, width=120, height=32, 
+                 bg=COLORS['accent'], hover_bg=COLORS['accent_hover'], fg=COLORS['text']):
+        super().__init__(parent, width=width, height=height, 
+                        bg=parent.cget('bg'), highlightthickness=0)
+        self.command = command
+        self.bg = bg
+        self.hover_bg = hover_bg
+        self.fg = fg
+        self.text = text
+        self.width = width
+        self.height = height
+        
+        self._draw_button(self.bg)
+        
+        self.bind('<Enter>', self._on_enter)
+        self.bind('<Leave>', self._on_leave)
+        self.bind('<Button-1>', self._on_click)
+    
+    def _draw_button(self, color):
+        self.delete('all')
+        # Rounded rectangle
+        radius = 6
+        self.create_arc(0, 0, radius*2, radius*2, start=90, extent=90, fill=color, outline=color)
+        self.create_arc(self.width-radius*2, 0, self.width, radius*2, start=0, extent=90, fill=color, outline=color)
+        self.create_arc(0, self.height-radius*2, radius*2, self.height, start=180, extent=90, fill=color, outline=color)
+        self.create_arc(self.width-radius*2, self.height-radius*2, self.width, self.height, start=270, extent=90, fill=color, outline=color)
+        self.create_rectangle(radius, 0, self.width-radius, self.height, fill=color, outline=color)
+        self.create_rectangle(0, radius, self.width, self.height-radius, fill=color, outline=color)
+        # Text
+        self.create_text(self.width//2, self.height//2, text=self.text, fill=self.fg, font=('Segoe UI', 10, 'bold'))
+    
+    def _on_enter(self, event):
+        self._draw_button(self.hover_bg)
+    
+    def _on_leave(self, event):
+        self._draw_button(self.bg)
+    
+    def _on_click(self, event):
+        if self.command:
+            self.command()
+
 
 class CsvPlotApp:
     def __init__(self, root):
         self.root = root
-        self.root.title('Visualiseur CSV de mesures (v2)')
+        self.root.title('📊 CSV Plotter Pro')
+        self.root.configure(bg=COLORS['bg_dark'])
+        self.root.geometry('1200x800')
         self.df = None
 
-        top = tk.Frame(root)
-        top.pack(side=tk.TOP, fill=tk.X, padx=6, pady=6)
+        # Configure ttk styles
+        self._setup_styles()
 
-        btn_load = tk.Button(top, text='Charger CSV', command=self.load_csv)
-        btn_load.pack(side=tk.LEFT)
+        # Main container
+        main_container = tk.Frame(root, bg=COLORS['bg_dark'])
+        main_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
-        tk.Label(top, text='X:').pack(side=tk.LEFT, padx=(10, 2))
+        # Header frame
+        header = tk.Frame(main_container, bg=COLORS['bg_medium'], height=60)
+        header.pack(fill=tk.X, pady=(0, 10))
+        header.pack_propagate(False)
+        
+        # Title
+        title_label = tk.Label(header, text='📊 CSV Plotter Pro', 
+                              font=('Segoe UI', 18, 'bold'), 
+                              fg=COLORS['text'], bg=COLORS['bg_medium'])
+        title_label.pack(side=tk.LEFT, padx=20, pady=10)
+
+        # Controls panel (left side) - with scrollable content
+        left_panel = tk.Frame(main_container, bg=COLORS['bg_medium'], width=280)
+        left_panel.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
+        left_panel.pack_propagate(False)
+
+        # File section
+        self._create_section(left_panel, '📁 Fichier', 0)
+        
+        file_frame = tk.Frame(left_panel, bg=COLORS['bg_medium'])
+        file_frame.pack(fill=tk.X, padx=15, pady=(0, 8))
+        
+        self.load_btn = ModernButton(file_frame, '📂 Charger CSV', self.load_csv, width=250, height=28)
+        self.load_btn.pack(pady=3)
+        
+        self.file_label = tk.Label(file_frame, text='Aucun fichier chargé', 
+                                   font=('Segoe UI', 8), fg=COLORS['text_muted'], 
+                                   bg=COLORS['bg_medium'], wraplength=240)
+        self.file_label.pack(pady=2)
+
+        # Axes section
+        self._create_section(left_panel, '📈 Axes', 1)
+        
+        axes_frame = tk.Frame(left_panel, bg=COLORS['bg_medium'])
+        axes_frame.pack(fill=tk.X, padx=15, pady=(0, 8))
+        
+        # X axis
+        tk.Label(axes_frame, text='Axe X', font=('Segoe UI', 9, 'bold'),
+                fg=COLORS['text'], bg=COLORS['bg_medium']).pack(anchor='w')
         self.x_var = tk.StringVar(value='Index')
-        self.x_menu = tk.OptionMenu(top, self.x_var, 'Index')
-        self.x_menu.config(width=20)
-        self.x_menu.pack(side=tk.LEFT)
-
-        tk.Label(top, text='Y:').pack(side=tk.LEFT, padx=(10, 2))
+        self.x_combo = ttk.Combobox(axes_frame, textvariable=self.x_var, 
+                                    values=['Index'], state='readonly', width=35)
+        self.x_combo.pack(fill=tk.X, pady=(1, 5))
+        
+        # Y axis
+        tk.Label(axes_frame, text='Axe Y', font=('Segoe UI', 9, 'bold'),
+                fg=COLORS['text'], bg=COLORS['bg_medium']).pack(anchor='w')
         self.y_var = tk.StringVar(value='')
-        self.y_menu = tk.OptionMenu(top, self.y_var, '')
-        self.y_menu.config(width=30)
-        self.y_menu.pack(side=tk.LEFT)
+        self.y_combo = ttk.Combobox(axes_frame, textvariable=self.y_var, 
+                                    values=[], state='readonly', width=35)
+        self.y_combo.pack(fill=tk.X, pady=(1, 5))
 
-        # 'Tracer' button removed: plotting is now automatique lors du changement d'axes
-
-        # Filtering controls
-        tk.Label(top, text='Fréq. échant.:').pack(side=tk.LEFT, padx=(10, 2))
-        self.sampling_freq_label = tk.Label(top, text='- Hz', width=10, anchor='w')
-        self.sampling_freq_label.pack(side=tk.LEFT)
+        # Filter section
+        self._create_section(left_panel, '🎚️ Filtre Butterworth', 2)
         
-        tk.Label(top, text='Coupure (Hz):').pack(side=tk.LEFT, padx=(10, 2))
+        filter_frame = tk.Frame(left_panel, bg=COLORS['bg_medium'])
+        filter_frame.pack(fill=tk.X, padx=15, pady=(0, 8))
+        
+        # Sampling frequency display (more compact)
+        freq_display = tk.Frame(filter_frame, bg=COLORS['bg_light'], padx=8, pady=5)
+        freq_display.pack(fill=tk.X, pady=(0, 5))
+        
+        freq_row = tk.Frame(freq_display, bg=COLORS['bg_light'])
+        freq_row.pack(fill=tk.X)
+        tk.Label(freq_row, text='Fréq. échant.:', font=('Segoe UI', 9),
+                fg=COLORS['text_muted'], bg=COLORS['bg_light']).pack(side=tk.LEFT)
+        self.sampling_freq_label = tk.Label(freq_row, text='— Hz', 
+                                            font=('Segoe UI', 12, 'bold'),
+                                            fg=COLORS['success'], bg=COLORS['bg_light'])
+        self.sampling_freq_label.pack(side=tk.LEFT, padx=(5, 0))
+        
+        # Cutoff frequency input
+        tk.Label(filter_frame, text='Fréquence de coupure (Hz)', font=('Segoe UI', 9),
+                fg=COLORS['text'], bg=COLORS['bg_medium']).pack(anchor='w', pady=(3, 1))
+        
         self.filter_freq_var = tk.StringVar(value='1.0')
-        filter_entry = tk.Entry(top, textvariable=self.filter_freq_var, width=10)
-        filter_entry.pack(side=tk.LEFT, padx=2)
+        self.filter_entry = ttk.Entry(filter_frame, textvariable=self.filter_freq_var, 
+                                      width=38, font=('Segoe UI', 10))
+        self.filter_entry.pack(fill=tk.X, pady=(0, 5))
         
-        btn_filter = tk.Button(top, text='Appliquer filtre', command=self.apply_filter)
-        btn_filter.pack(side=tk.LEFT, padx=6)
+        self.filter_btn = ModernButton(filter_frame, '🔊 Appliquer filtre', 
+                                       self.apply_filter, width=250, height=28,
+                                       bg=COLORS['success'], hover_bg='#388E3C')
+        self.filter_btn.pack(pady=3)
 
-        # Matplotlib figure
-        self.fig = Figure(figsize=(7, 4))
-        self.ax = self.fig.add_subplot(111)
-        self.canvas = FigureCanvasTkAgg(self.fig, master=root)
-        self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=1)
-
-        # Label to display selected index (only active when X='Index')
-        self.index_label = tk.Label(root, text='', font=('Arial', 10), fg='black', bg='white')
-        self.index_label.pack(side=tk.BOTTOM, padx=6, pady=6)
-
-        # Export controls frame
-        export_frame = tk.Frame(root)
-        export_frame.pack(side=tk.BOTTOM, padx=6, pady=3)
+        # Export section
+        self._create_section(left_panel, '💾 Export', 3)
+        
+        export_frame = tk.Frame(left_panel, bg=COLORS['bg_medium'])
+        export_frame.pack(fill=tk.X, padx=15, pady=(0, 8))
         
         self.export_filtered_var = tk.BooleanVar(value=False)
-        checkbox_filtered = tk.Checkbutton(export_frame, text='Filtré', variable=self.export_filtered_var)
-        checkbox_filtered.pack(side=tk.LEFT, padx=(0, 6))
+        self.export_check = ttk.Checkbutton(export_frame, text='Exporter données filtrées',
+                                            variable=self.export_filtered_var)
+        self.export_check.pack(anchor='w', pady=(0, 5))
+        
+        self.export_btn = ModernButton(export_frame, '💾 Exporter CSV', 
+                                       self.export_csv, width=250, height=28,
+                                       bg=COLORS['accent'], hover_bg=COLORS['accent_hover'])
+        self.export_btn.pack(pady=3)
 
-        # Export button
-        self.export_btn = tk.Button(export_frame, text='Exporter CSV', command=self.export_csv)
-        self.export_btn.pack(side=tk.LEFT)
+        # Graph area (right side)
+        graph_container = tk.Frame(main_container, bg=COLORS['bg_medium'])
+        graph_container.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
+
+        # Matplotlib figure with light theme
+        self.fig = Figure(figsize=(8, 5), facecolor=COLORS['bg_medium'])
+        self.ax = self.fig.add_subplot(111)
+        self._style_axes()
+        
+        self.canvas = FigureCanvasTkAgg(self.fig, master=graph_container)
+        self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        # Status bar with min/max info
+        status_frame = tk.Frame(graph_container, bg=COLORS['bg_light'], height=50)
+        status_frame.pack(fill=tk.X, side=tk.BOTTOM, padx=5, pady=5)
+        status_frame.pack_propagate(False)
+        
+        # Left side: general info
+        self.index_label = tk.Label(status_frame, text='💡 Chargez un fichier CSV pour commencer', 
+                                    font=('Segoe UI', 9), fg=COLORS['text_muted'], 
+                                    bg=COLORS['bg_light'])
+        self.index_label.pack(side=tk.LEFT, padx=10, pady=5)
+        
+        # Right side: min/max values
+        minmax_frame = tk.Frame(status_frame, bg=COLORS['bg_light'])
+        minmax_frame.pack(side=tk.RIGHT, padx=10, pady=5)
+        
+        self.minmax_label = tk.Label(minmax_frame, text='', 
+                                     font=('Segoe UI', 9), fg=COLORS['text'], 
+                                     bg=COLORS['bg_light'])
+        self.minmax_label.pack(side=tk.RIGHT)
 
         # Track plot state for index selection
         self.x_data = None
         self.y_data = None
-        self.y_filtered = None  # Store filtered data
+        self.y_filtered = None
         self.x_is_index = False
-        self.selected_indices = []  # List to store up to 2 selected indices
-        self.y_choice = None  # Store the current Y column name
-        self.sampling_frequency = 1000  # Default sampling frequency (Hz)
-        self.loaded_file_path = None  # Store the path of the loaded CSV file
+        self.selected_indices = []
+        self.y_choice = None
+        self.sampling_frequency = 1000
+        self.loaded_file_path = None
         self._suspend_auto_plot = False
 
         # Mouse/zoom state
@@ -91,10 +235,77 @@ class CsvPlotApp:
         self._base_xlim = None
         self._base_ylim = None
 
-        # Connect mouse events (press, move, release)
+        # Connect mouse events
         self.fig.canvas.mpl_connect('button_press_event', self._on_mouse_press)
         self.fig.canvas.mpl_connect('motion_notify_event', self._on_mouse_move)
         self.fig.canvas.mpl_connect('button_release_event', self._on_mouse_release)
+
+        # Bind combobox events
+        self.x_combo.bind('<<ComboboxSelected>>', lambda e: self._on_axis_change())
+        self.y_combo.bind('<<ComboboxSelected>>', lambda e: self._on_axis_change())
+
+    def _setup_styles(self):
+        """Configure ttk styles for modern look"""
+        style = ttk.Style()
+        style.theme_use('clam')
+        
+        # Combobox style
+        style.configure('TCombobox', 
+                       fieldbackground=COLORS['bg_light'],
+                       background=COLORS['bg_light'],
+                       foreground=COLORS['text'],
+                       arrowcolor=COLORS['text'],
+                       padding=8)
+        style.map('TCombobox', 
+                 fieldbackground=[('readonly', COLORS['bg_light'])],
+                 selectbackground=[('readonly', COLORS['accent'])],
+                 selectforeground=[('readonly', COLORS['text'])])
+        
+        # Entry style
+        style.configure('TEntry',
+                       fieldbackground=COLORS['bg_light'],
+                       foreground=COLORS['text'],
+                       padding=8)
+        
+        # Checkbutton style
+        style.configure('TCheckbutton',
+                       background=COLORS['bg_medium'],
+                       foreground=COLORS['text'],
+                       font=('Segoe UI', 10))
+
+    def _create_section(self, parent, title, row):
+        """Create a section header"""
+        frame = tk.Frame(parent, bg=COLORS['bg_medium'])
+        frame.pack(fill=tk.X, padx=15, pady=(10, 3))
+        
+        tk.Label(frame, text=title, font=('Segoe UI', 10, 'bold'),
+                fg=COLORS['text'], bg=COLORS['bg_medium']).pack(anchor='w')
+        
+        # Separator line
+        separator = tk.Frame(frame, bg=COLORS['accent'], height=2)
+        separator.pack(fill=tk.X, pady=(3, 0))
+
+    def _style_axes(self):
+        """Apply light theme to matplotlib axes"""
+        self.ax.set_facecolor('#ffffff')
+        self.ax.tick_params(colors=COLORS['text'], which='both')
+        self.ax.xaxis.label.set_color(COLORS['text'])
+        self.ax.yaxis.label.set_color(COLORS['text'])
+        self.ax.title.set_color(COLORS['text'])
+        for spine in self.ax.spines.values():
+            spine.set_color(COLORS['border'])
+        self.ax.grid(True, color=COLORS['border'], alpha=0.5, linestyle='--')
+
+    def _on_axis_change(self):
+        """Handle axis selection change"""
+        if not self._suspend_auto_plot and self.df is not None:
+            self.plot_selected()
+
+    def _update_combobox(self, combo, values):
+        """Update combobox values"""
+        combo['values'] = values
+        if values and combo.get() not in values:
+            combo.set(values[0] if values else '')
 
     def load_csv(self):
         path = filedialog.askopenfilename(filetypes=[('CSV', '*.csv'), ('All files', '*.*')])
@@ -228,46 +439,29 @@ class CsvPlotApp:
         self.sampling_freq_label.config(text=f'{self.sampling_frequency:.0f} Hz')
         self.filter_freq_var.set(f'{self.sampling_frequency / 4:.2f}')  # Suggest Nyquist/4 as default cutoff
 
-        # Update X/Y menus. suspend auto-plot while populating
+        # Update X/Y comboboxes. suspend auto-plot while populating
         self._suspend_auto_plot = True
         x_options = ['Index'] + cols
-        self._update_option_menu(self.x_menu, self.x_var, x_options)
+        self._update_combobox(self.x_combo, x_options)
+        self.x_var.set('Index')
 
-        # Update Y menu: numeric columns only
+        # Update Y combobox: numeric columns only
         num_cols = [c for c in cols if pd.api.types.is_numeric_dtype(df[c])]
         if not num_cols:
             # if no numeric columns, allow all columns
             num_cols = cols
-        self._update_option_menu(self.y_menu, self.y_var, num_cols)
+        self._update_combobox(self.y_combo, num_cols)
         if num_cols:
             # set default without triggering plot
             self.y_var.set(num_cols[0])
         self._suspend_auto_plot = False
+        
+        # Update file label
+        import os
+        self.file_label.config(text=f'✅ {os.path.basename(path)}')
+        self.index_label.config(text=f'📊 {len(df)} points • {len(cols)} colonnes')
+        
         # plot once with defaults
-        try:
-            self.plot_selected()
-        except Exception:
-            pass
-
-        messagebox.showinfo('Chargé', f'Fichier chargé : {path}\nColonnes trouvées: {len(cols)}')
-
-    def _update_option_menu(self, menu_widget, var, options):
-        menu = menu_widget['menu']
-        menu.delete(0, 'end')
-        for opt in options:
-            menu.add_command(label=opt, command=lambda v=opt, vr=var: self._option_selected(vr, v))
-        # set default; if auto-plot is not suspended, use _option_selected to trigger plot
-        if options:
-            if getattr(self, '_suspend_auto_plot', False):
-                var.set(options[0])
-            else:
-                self._option_selected(var, options[0])
-
-    def _option_selected(self, var, value):
-        # set the option and update plot
-        var.set(value)
-        if getattr(self, '_suspend_auto_plot', False):
-            return
         try:
             self.plot_selected()
         except Exception:
@@ -281,7 +475,7 @@ class CsvPlotApp:
         x_choice = self.x_var.get()
         y_choice = self.y_var.get()
         if not y_choice:
-            messagebox.showwarning('Aucune mesure', 'S\u00e9lectionnez une mesure (axe Y).')
+            messagebox.showwarning('Aucune mesure', 'Sélectionnez une mesure (axe Y).')
             return
 
         try:
@@ -292,7 +486,8 @@ class CsvPlotApp:
             y = self.df[y_choice]
 
             self.ax.clear()
-            self.ax.plot(x, y, linestyle='-', label='Original', color='blue')
+            self._style_axes()
+            self.ax.plot(x, y, linestyle='-', label='Original', color='#1565C0', linewidth=1)
             
             # Store data for index selection
             self.x_data = np.asarray(x)
@@ -301,23 +496,22 @@ class CsvPlotApp:
             self.y_choice = y_choice  # Store column name
             self.x_is_index = (x_choice == 'Index')
             self.selected_indices = []  # Reset selected indices
-            self.index_label.config(text='')  # Clear label
             
-            self.ax.set_xlabel(x_choice)
-            self.ax.set_ylabel(y_choice)
-            self.ax.set_title(f'{y_choice} vs {x_choice}')
-            self.ax.grid(True)
-            self.ax.legend()
+            self.ax.set_xlabel(x_choice, fontsize=10)
+            self.ax.set_ylabel(y_choice, fontsize=10)
+            self.ax.set_title(f'{y_choice}', fontsize=12, fontweight='bold', color=COLORS['text'])
+            self.ax.legend(loc='upper right', facecolor=COLORS['bg_medium'], 
+                          edgecolor=COLORS['border'], labelcolor=COLORS['text'])
             self.fig.tight_layout()
             self.canvas.draw()
+            
+            # Update status and min/max
+            self.index_label.config(text=f'📊 {len(self.x_data)} points')
+            x_min, x_max = np.nanmin(self.x_data), np.nanmax(self.x_data)
+            y_min, y_max = np.nanmin(self.y_data), np.nanmax(self.y_data)
+            self.minmax_label.config(text=f'X: [{x_min:.2f}, {x_max:.2f}]  |  Y: [{y_min:.2f}, {y_max:.2f}]')
+            
             # Save base limits for reset
-            # Save base limits for reset
-            try:
-                self._base_xlim = self.ax.get_xlim()
-                self._base_ylim = self.ax.get_ylim()
-            except Exception:
-                self._base_xlim = None
-                self._base_ylim = None
             try:
                 self._base_xlim = self.ax.get_xlim()
                 self._base_ylim = self.ax.get_ylim()
@@ -577,15 +771,20 @@ class CsvPlotApp:
             x = self.x_data
 
             self.ax.clear()
+            self._style_axes()
+            
             # Plot original first, then filtered on top with thicker line
-            self.ax.plot(x, self.y_data, linestyle='-', label='Original', color='blue', alpha=0.4, linewidth=0.5)
-            self.ax.plot(x, y_filtered, linestyle='-', label=f'Filtré ({freq_cutoff} Hz)', color='red', linewidth=2, zorder=10)
+            self.ax.plot(x, self.y_data, linestyle='-', label='Original', 
+                        color='#90CAF9', alpha=0.7, linewidth=0.8)
+            self.ax.plot(x, y_filtered, linestyle='-', label=f'Filtré ({freq_cutoff} Hz)', 
+                        color='#D32F2F', linewidth=2, zorder=10)
 
-            self.ax.set_xlabel(x_choice)
-            self.ax.set_ylabel(self.y_choice)
-            self.ax.set_title(f'{self.y_choice} vs {x_choice} (avec filtre)')
-            self.ax.grid(True)
-            self.ax.legend()
+            self.ax.set_xlabel(x_choice, fontsize=10)
+            self.ax.set_ylabel(self.y_choice, fontsize=10)
+            self.ax.set_title(f'{self.y_choice} (filtré à {freq_cutoff} Hz)', 
+                             fontsize=12, fontweight='bold', color=COLORS['text'])
+            self.ax.legend(loc='upper right', facecolor=COLORS['bg_medium'], 
+                          edgecolor=COLORS['border'], labelcolor=COLORS['text'])
             
             # Force auto-scale to show both curves
             self.ax.relim()
@@ -596,6 +795,12 @@ class CsvPlotApp:
             # Force redraw
             self.canvas.draw()
             self.canvas.flush_events()
+            
+            # Update status and min/max (showing filtered values)
+            self.index_label.config(text=f'✅ Filtre: {freq_cutoff} Hz')
+            x_min, x_max = np.nanmin(self.x_data), np.nanmax(self.x_data)
+            y_min, y_max = np.nanmin(y_filtered), np.nanmax(y_filtered)
+            self.minmax_label.config(text=f'X: [{x_min:.2f}, {x_max:.2f}]  |  Y filtré: [{y_min:.2f}, {y_max:.2f}]')
 
             # Update base limits to include both curves
             try:
@@ -605,7 +810,6 @@ class CsvPlotApp:
                 self._base_xlim = None
                 self._base_ylim = None
 
-            messagebox.showinfo('Succès', f'Filtre passe-bas Butterworth appliqué\nFréquence de coupure: {freq_cutoff} Hz')
         except Exception as e:
             messagebox.showerror('Erreur', f"Impossible d'appliquer le filtre:\n{e}")
 
